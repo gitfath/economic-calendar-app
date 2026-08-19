@@ -607,7 +607,9 @@ def show_streamlit_interface():
         elif val == "medium": return "background-color: #ffd93d; color: black;"
         elif val == "low": return "background-color: #6bcb77; color: white;"
         return ""
-    styled_df = df.style.applymap(highlight_impact, subset=["Impact"])
+
+    # CORRECTION : applymap → map
+    styled_df = df.style.map(highlight_impact, subset=["Impact"])
     st.dataframe(styled_df, use_container_width=True, height=400)
 
     st.subheader("📖 Interprétations")
