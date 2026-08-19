@@ -233,7 +233,7 @@ def get_fred_snapshot() -> Dict:
     return result
 
 # ============================================================
-# 6. BASE DE CONNAISSANCES (INTÉGRALE – toutes les entrées)
+# 6. BASE DE CONNAISSANCES (INTÉGRALE)
 # ============================================================
 INDICATOR_KNOWLEDGE = {
     "FOMC": {
