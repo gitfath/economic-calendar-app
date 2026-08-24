@@ -12,17 +12,36 @@ import time
 import requests
 from datetime import datetime, timezone
 from typing import List, Dict
+from pathlib import Path
+from dotenv import load_dotenv
 
 # ============================================================
-# Chargement optionnel du fichier .env (si dotenv est installé)
+# Chargement du fichier .env (si présent) et fallback st.secrets
 # ============================================================
+dotenv_path = Path(__file__).parent / ".env"
+if dotenv_path.exists():
+    load_dotenv(dotenv_path=dotenv_path)
+    print(f"✅ .env chargé depuis {dotenv_path}")
+else:
+    print("ℹ️ Aucun .env trouvé, utilisation des variables d'environnement ou st.secrets")
+
+# Variables qui peuvent provenir de .env ou st.secrets selon le contexte
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    print("✅ .env chargé avec python-dotenv")
-except ImportError:
-    # python-dotenv n'est pas installé, on utilise les variables d'environnement système
-    print("ℹ️ python-dotenv non installé, utilisation des variables d'environnement système.")
+    import streamlit as st
+    PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", os.getenv("PARSEBOT_API_KEY", ""))
+    TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN"))
+    TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID"))
+except Exception:
+    # En mode batch (pas de st.secrets)
+    PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
+
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))  # 30 min
+
+CACHE_FILE = "events_cache.json"
+NOTIFIED_FILE = "notified_events.json"
 
 # --- Import conditionnel de streamlit et pandas (seulement en mode interface) ---
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
@@ -756,6 +775,7 @@ def run_batch_continuous():
     # Affichage des tokens pour debug
     print(f"🔑 Token Telegram : {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:] if len(TELEGRAM_BOT_TOKEN)>10 else ''}")
     print(f"🆔 Chat ID : {TELEGRAM_CHAT_ID}")
+    print(f"🔑 FRED_API_KEY : {FRED_API_KEY[:5]}...{FRED_API_KEY[-5:] if len(FRED_API_KEY)>10 else ''}")
 
     while True:
         try:
