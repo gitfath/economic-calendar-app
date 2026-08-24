@@ -15,9 +15,9 @@ from typing import List, Dict
 from pathlib import Path
 
 # ============================================================
-# CONFIGURATION UNIFIÉE (local .env + Streamlit secrets)
+# CONFIGURATION UNIFIÉE - Version robuste (local .env + Streamlit secrets)
 # ============================================================
-# 1. Charger .env s'il existe (pour le mode batch local)
+# Chargement forcé du .env depuis le dossier du script
 try:
     from dotenv import load_dotenv
     env_path = Path(__file__).parent / ".env"
@@ -25,48 +25,57 @@ try:
         load_dotenv(dotenv_path=env_path)
         print(f"✅ .env chargé depuis {env_path}")
     else:
-        print("ℹ️ Aucun .env trouvé, utilisation des variables d'environnement ou secrets.")
+        print("ℹ️ Aucun .env trouvé.")
 except ImportError:
-    print("ℹ️ python-dotenv non installé, utilisation des variables d'environnement ou secrets.")
+    print("ℹ️ python-dotenv non installé, utilisation des variables d'environnement.")
 
-# 2. Déterminer si on est en mode Streamlit (interface) ou batch
-IN_STREAMLIT = False
-try:
-    import streamlit as st
-    import sys
-    if 'streamlit' in sys.modules:
-        IN_STREAMLIT = True
-except Exception:
-    IN_STREAMLIT = False
+# Déterminer si on est en mode Streamlit (interface) ou batch
+# On vérifie la présence de 'streamlit' dans les modules chargés
+is_streamlit = 'streamlit' in sys.modules
 
-# 3. Lecture des variables
-if IN_STREAMLIT and not isinstance(st, type(None)) and hasattr(st, 'secrets'):
-    # En mode Streamlit (vrai), on utilise st.secrets en priorité
-    PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", os.getenv("PARSEBOT_API_KEY", ""))
-    TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN"))
-    TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID"))
-    FRED_API_KEY = st.secrets.get("FRED_API_KEY", os.getenv("FRED_API_KEY", ""))
-    print("🔑 Utilisation de st.secrets (Streamlit) pour les clés.")
+# Lecture des variables
+if is_streamlit:
+    try:
+        import streamlit as st
+        # En priorité, on utilise st.secrets
+        PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", os.getenv("PARSEBOT_API_KEY", ""))
+        TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN"))
+        TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID"))
+        FRED_API_KEY = st.secrets.get("FRED_API_KEY", os.getenv("FRED_API_KEY", ""))
+        print("🔑 Utilisation de st.secrets (Streamlit)")
+    except Exception:
+        # Fallback
+        PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
+        TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
+        TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
+        FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+        print("🔑 Utilisation de os.getenv (fallback)")
 else:
-    # Mode batch (ou DummySt), on utilise os.getenv (chargé depuis .env)
+    # Mode batch (pas de streamlit)
     PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
     TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
     FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-    print("🔑 Utilisation de os.getenv (variables d'environnement) pour les clés.")
+    print("🔑 Utilisation de os.getenv (batch)")
 
-# 4. Logs de vérification (sans exposer tout le token)
-print(f"📌 PARSEBOT_API_KEY: {PARSEBOT_API_KEY[:5]}...{PARSEBOT_API_KEY[-5:] if len(PARSEBOT_API_KEY)>10 else ''}")
-print(f"📌 TELEGRAM_BOT_TOKEN: {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:] if len(TELEGRAM_BOT_TOKEN)>10 else ''}")
-print(f"📌 TELEGRAM_CHAT_ID: {TELEGRAM_CHAT_ID}")
-print(f"📌 FRED_API_KEY: {FRED_API_KEY[:5]}...{FRED_API_KEY[-5:] if len(FRED_API_KEY)>10 else ''}")
-
-# 5. Vérification critique
+# Vérification critique
 if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
-    print("⚠️ ATTENTION : Tokens Telegram non configurés ! Les messages ne seront pas envoyés.")
-    print("   Assurez-vous que TELEGRAM_BOT_TOKEN et TELEGRAM_CHAT_ID sont définis.")
+    print("⚠️ ATTENTION : Tokens Telegram non configurés !")
+    print("   En local, assurez-vous que le fichier .env contient :")
+    print("   TELEGRAM_BOT_TOKEN=votre_token")
+    print("   TELEGRAM_CHAT_ID=votre_chat_id")
+    print("   Sur Streamlit Cloud, définissez les secrets correspondants.")
+else:
+    print("✅ Tokens Telegram configurés.")
 
+# Autres variables
+REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))  # 30 min
+CACHE_FILE = "events_cache.json"
+NOTIFIED_FILE = "notified_events.json"
+
+# ============================================================
 # --- Import conditionnel de streamlit et pandas (seulement en mode interface) ---
+# (Cette partie doit être après la détection is_streamlit pour ne pas interférer)
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
     import streamlit as st
     import pandas as pd
@@ -103,14 +112,6 @@ else:
             return Secrets()
     st = DummySt()
     pd = None
-
-# ============================================================
-# 1. CONFIGURATION (les variables globales sont déjà définies ci-dessus)
-# ============================================================
-# On conserve les mêmes noms pour la compatibilité
-CACHE_FILE = "events_cache.json"
-NOTIFIED_FILE = "notified_events.json"
-REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))
 
 # ============================================================
 # 2. DATE UTC
@@ -787,10 +788,20 @@ def run_batch_continuous():
     """Mode continu : envoie un rapport complet toutes les 30 minutes."""
     print(f"🚀 CONTINU - Annonces du {TODAY_DISPLAY}")
     print(f"⏱️ Intervalle : {REFRESH_INTERVAL} secondes")
-    # Affichage des tokens pour debug
-    print(f"🔑 Token Telegram : {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:] if len(TELEGRAM_BOT_TOKEN)>10 else ''}")
-    print(f"🆔 Chat ID : {TELEGRAM_CHAT_ID}")
-    print(f"🔑 FRED_API_KEY : {FRED_API_KEY[:5]}...{FRED_API_KEY[-5:] if len(FRED_API_KEY)>10 else ''}")
+    
+    # VÉRIFICATION FORTE DES TOKENS AVANT DE DÉMARRER
+    print("🔍 DIAGNOSTIC DES TOKENS :")
+    print(f"   Token Telegram (brut) : {TELEGRAM_BOT_TOKEN}")
+    print(f"   Chat ID (brut) : {TELEGRAM_CHAT_ID}")
+    print(f"   Token == 'VOTRE_TOKEN' ? {TELEGRAM_BOT_TOKEN == 'VOTRE_TOKEN'}")
+    print(f"   Chat ID == 'VOTRE_CHAT_ID' ? {TELEGRAM_CHAT_ID == 'VOTRE_CHAT_ID'}")
+    
+    if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
+        print("❌ ERREUR : Tokens Telegram non configurés. Arrêt du mode continu.")
+        print("   Vérifiez que .env ou st.secrets contiennent les bonnes valeurs.")
+        return
+    
+    print("✅ Tokens Telegram valides, lancement de la boucle continue.")
 
     while True:
         try:
@@ -805,7 +816,7 @@ def run_batch_continuous():
                 if send_telegram_message(report):
                     print("✅ Rapport complet envoyé sur Telegram.")
                 else:
-                    print("⚠️ ÉCHEC de l'envoi du rapport complet (vérifier token et chat_id).")
+                    print("⚠️ ÉCHEC de l'envoi du rapport complet.")
             else:
                 print("❌ Aucune annonce US trouvée, aucun rapport envoyé.")
 
