@@ -15,72 +15,51 @@ from typing import List, Dict
 from pathlib import Path
 
 # ============================================================
-# CONFIGURATION UNIFIÉE - Version robuste (local .env + Streamlit secrets)
+# CHARGEMENT SIMPLE DU .env (comme dans bot.py)
 # ============================================================
-# Chargement forcé du .env depuis le dossier du script
 try:
     from dotenv import load_dotenv
-    env_path = Path(__file__).parent / ".env"
-    if env_path.exists():
-        load_dotenv(dotenv_path=env_path)
-        print(f"✅ .env chargé depuis {env_path}")
-    else:
-        print("ℹ️ Aucun .env trouvé.")
+    load_dotenv()  # charge .env depuis le répertoire courant
+    print("✅ .env chargé avec load_dotenv()")
 except ImportError:
     print("ℹ️ python-dotenv non installé, utilisation des variables d'environnement.")
 
-# Déterminer si on est en mode Streamlit (interface) ou batch
-# On vérifie la présence de 'streamlit' dans les modules chargés
-is_streamlit = 'streamlit' in sys.modules
+# ============================================================
+# LECTURE DES VARIABLES
+# ============================================================
+PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
+FRED_API_KEY = os.getenv("FRED_API_KEY", "")
+REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))
 
-# Lecture des variables
-if is_streamlit:
-    try:
-        import streamlit as st
-        # En priorité, on utilise st.secrets
-        PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", os.getenv("PARSEBOT_API_KEY", ""))
-        TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN"))
-        TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID"))
-        FRED_API_KEY = st.secrets.get("FRED_API_KEY", os.getenv("FRED_API_KEY", ""))
+# Si on est sur Streamlit Cloud, on peut prioriser st.secrets
+try:
+    import streamlit as st
+    if hasattr(st, 'secrets'):
+        TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN)
+        TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID)
+        PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", PARSEBOT_API_KEY)
+        FRED_API_KEY = st.secrets.get("FRED_API_KEY", FRED_API_KEY)
         print("🔑 Utilisation de st.secrets (Streamlit)")
-    except Exception:
-        # Fallback
-        PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
-        TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
-        TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
-        FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-        print("🔑 Utilisation de os.getenv (fallback)")
-else:
-    # Mode batch (pas de streamlit)
-    PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
-    FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-    print("🔑 Utilisation de os.getenv (batch)")
+except Exception:
+    pass
 
-# Vérification critique
+# ============================================================
+# VÉRIFICATION DES TOKENS (diagnostic)
+# ============================================================
 if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
     print("⚠️ ATTENTION : Tokens Telegram non configurés !")
-    print("   En local, assurez-vous que le fichier .env contient :")
-    print("   TELEGRAM_BOT_TOKEN=votre_token")
-    print("   TELEGRAM_CHAT_ID=votre_chat_id")
-    print("   Sur Streamlit Cloud, définissez les secrets correspondants.")
+    print("   Vérifiez votre fichier .env ou vos secrets.")
 else:
     print("✅ Tokens Telegram configurés.")
 
-# Autres variables
-REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))  # 30 min
-CACHE_FILE = "events_cache.json"
-NOTIFIED_FILE = "notified_events.json"
-
-# ============================================================
 # --- Import conditionnel de streamlit et pandas (seulement en mode interface) ---
-# (Cette partie doit être après la détection is_streamlit pour ne pas interférer)
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
     import streamlit as st
     import pandas as pd
 else:
-    # Mode batch : stubs pour éviter les erreurs
+    # Mode batch : stubs
     class DummySt:
         def cache_data(self, *args, **kwargs):
             return lambda f: f
@@ -114,17 +93,17 @@ else:
     pd = None
 
 # ============================================================
-# 2. DATE UTC
+# Le reste du code est inchangé (fonctions get_events, etc.)
 # ============================================================
+CACHE_FILE = "events_cache.json"
+NOTIFIED_FILE = "notified_events.json"
+
 def get_today_utc() -> tuple:
     now_utc = datetime.now(timezone.utc)
     return now_utc.strftime("%Y-%m-%d"), now_utc.strftime("%d/%m/%Y")
 
 TODAY, TODAY_DISPLAY = get_today_utc()
 
-# ============================================================
-# 3. GESTION DU CACHE
-# ============================================================
 def load_json(filename: str, default: List = None) -> List:
     try:
         with open(filename, "r", encoding="utf-8") as f:
@@ -136,9 +115,6 @@ def save_json(filename: str, data: List):
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
-# ============================================================
-# 4. RÉCUPÉRATION DES ÉVÉNEMENTS (Parse.bot + fallback ForexFactory)
-# ============================================================
 def get_parsebot_events_rest() -> List[Dict]:
     if not PARSEBOT_API_KEY:
         return []
@@ -239,9 +215,6 @@ def get_events() -> List[Dict]:
             events.append(ev)
     return events
 
-# ============================================================
-# 5. FRED API (avec logs d'erreur)
-# ============================================================
 FRED_SERIES = {
     "CPIAUCSL": {"name": "CPI (Inflation)"},
     "UNRATE": {"name": "Taux de chômage"},
@@ -286,9 +259,10 @@ def get_fred_snapshot() -> Dict:
     return result
 
 # ============================================================
-# 6. BASE DE CONNAISSANCES (INDICATOR_KNOWLEDGE) - Version complète
+# INDICATOR_KNOWLEDGE (inchangé – contenu complet)
 # ============================================================
 INDICATOR_KNOWLEDGE = {
+    # ... (copiez votre dictionnaire complet ici, il est inchangé)
     "FOMC": {
         "category": "Monétaire",
         "description": "Décision de taux de la Fed. Le plus important pour le Dollar.",
@@ -472,7 +446,7 @@ INDICATOR_KNOWLEDGE = {
 }
 
 # ============================================================
-# 7. FONCTIONS D'ANALYSE
+# FONCTIONS D'ANALYSE (inchangées)
 # ============================================================
 def classify_event(event_name: str) -> Dict:
     for key, knowledge in INDICATOR_KNOWLEDGE.items():
@@ -505,7 +479,7 @@ def generate_analysis(event: Dict) -> Dict:
     }
 
 # ============================================================
-# 8. IMPACT DIRECTIONNEL SUR LE DOLLAR
+# IMPACT DIRECTIONNEL SUR LE DOLLAR (inchangé)
 # ============================================================
 def get_dollar_impact(event: Dict) -> str:
     event_name = event.get("event", "")
@@ -565,7 +539,7 @@ def get_dollar_impact(event: Dict) -> str:
             return "🔴 Impact BAISSIER sur le Dollar (pire que prévu : valeur plus faible)"
 
 # ============================================================
-# 9. NOTIFICATIONS TELEGRAM
+# NOTIFICATIONS TELEGRAM
 # ============================================================
 def send_telegram_message(message: str) -> bool:
     token = TELEGRAM_BOT_TOKEN
@@ -687,7 +661,7 @@ def check_and_notify_updates(new_events: List[Dict], send_immediate: bool = True
     save_json(CACHE_FILE, new_events)
 
 # ============================================================
-# 10. GÉNÉRATION DU RAPPORT COMPLET
+# GÉNÉRATION DU RAPPORT COMPLET
 # ============================================================
 def format_fred_snapshot(fred_data: Dict) -> str:
     if not fred_data:
@@ -707,7 +681,6 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
     lines.append("=" * 80)
     lines.append("")
 
-    # Affichage du snapshot FRED uniquement si des données sont disponibles
     if fred_data:
         lines.append("📈 SNAPSHOT DES INDICATEURS (valeurs réelles FRED) :")
         lines.append(format_fred_snapshot(fred_data))
@@ -755,10 +728,9 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
     return "\n".join(lines)
 
 # ============================================================
-# 11. MODES D'EXÉCUTION
+# MODES D'EXÉCUTION
 # ============================================================
 def run_batch_once():
-    """Exécution unique (pour CRON)."""
     print(f"🚀 BATCH UTC - Annonces du {TODAY_DISPLAY}")
     events = get_events()
     fred_data = get_fred_snapshot() if FRED_API_KEY else {}
@@ -785,23 +757,11 @@ def run_batch_once():
         print("ℹ️ Heure actuelle : pas d'envoi de rapport complet (attendu entre 01:00 et 01:05 UTC).")
 
 def run_batch_continuous():
-    """Mode continu : envoie un rapport complet toutes les 30 minutes."""
     print(f"🚀 CONTINU - Annonces du {TODAY_DISPLAY}")
     print(f"⏱️ Intervalle : {REFRESH_INTERVAL} secondes")
-    
-    # VÉRIFICATION FORTE DES TOKENS AVANT DE DÉMARRER
-    print("🔍 DIAGNOSTIC DES TOKENS :")
-    print(f"   Token Telegram (brut) : {TELEGRAM_BOT_TOKEN}")
-    print(f"   Chat ID (brut) : {TELEGRAM_CHAT_ID}")
-    print(f"   Token == 'VOTRE_TOKEN' ? {TELEGRAM_BOT_TOKEN == 'VOTRE_TOKEN'}")
-    print(f"   Chat ID == 'VOTRE_CHAT_ID' ? {TELEGRAM_CHAT_ID == 'VOTRE_CHAT_ID'}")
-    
-    if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
-        print("❌ ERREUR : Tokens Telegram non configurés. Arrêt du mode continu.")
-        print("   Vérifiez que .env ou st.secrets contiennent les bonnes valeurs.")
-        return
-    
-    print("✅ Tokens Telegram valides, lancement de la boucle continue.")
+    print(f"🔑 Token Telegram : {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:] if len(TELEGRAM_BOT_TOKEN)>10 else ''}")
+    print(f"🆔 Chat ID : {TELEGRAM_CHAT_ID}")
+    print(f"🔑 FRED_API_KEY : {FRED_API_KEY[:5]}...{FRED_API_KEY[-5:] if len(FRED_API_KEY)>10 else ''}")
 
     while True:
         try:
@@ -816,7 +776,7 @@ def run_batch_continuous():
                 if send_telegram_message(report):
                     print("✅ Rapport complet envoyé sur Telegram.")
                 else:
-                    print("⚠️ ÉCHEC de l'envoi du rapport complet.")
+                    print("⚠️ ÉCHEC de l'envoi du rapport complet (vérifier token et chat_id).")
             else:
                 print("❌ Aucune annonce US trouvée, aucun rapport envoyé.")
 
@@ -837,7 +797,7 @@ def run_batch_continuous():
             time.sleep(60)
 
 # ============================================================
-# 12. INTERFACE STREAMLIT
+# INTERFACE STREAMLIT
 # ============================================================
 def show_streamlit_interface():
     st.set_page_config(page_title="Annonces Économiques US", layout="wide")
@@ -915,7 +875,7 @@ def show_streamlit_interface():
     st.caption("Données fournies par Parse.bot / ForexFactory | Rafraîchissement automatique toutes les 30 min.")
 
 # ============================================================
-# 13. ENTRÉE PRINCIPALE
+# ENTRÉE PRINCIPALE
 # ============================================================
 if __name__ == "__main__":
     if len(sys.argv) > 1:
