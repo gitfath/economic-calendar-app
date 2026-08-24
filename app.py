@@ -3,6 +3,7 @@
 """
 Application Streamlit + Bot Telegram (modes batch, continuous, watch)
 Annonces économiques US du jour, cache, notifications, rapport complet.
+Lecture manuelle du .env (sans dotenv) pour éviter les problèmes de BOM.
 """
 
 import os
@@ -15,15 +16,34 @@ from typing import List, Dict
 from pathlib import Path
 
 # ============================================================
-# CHARGEMENT DU .env
+# CHARGEMENT MANUEL DU .env (sans dotenv)
 # ============================================================
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    print("✅ .env chargé")
-except ImportError:
-    print("ℹ️ dotenv non installé, utilisation des variables d'environnement")
+def load_env_manually():
+    env_path = Path(__file__).parent / ".env"
+    env_vars = {}
+    if env_path.exists():
+        with open(env_path, 'r', encoding='utf-8-sig') as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    env_vars[key.strip()] = value.strip()
+        print(f"✅ {len(env_vars)} variables chargées depuis {env_path}")
+        for k in ['PARSEBOT_API_KEY', 'TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID', 'FRED_API_KEY']:
+            print(f"   {k} : {'OK' if env_vars.get(k) else 'MANQUANT'}")
+        return env_vars
+    else:
+        print(f"⚠️ Fichier .env introuvable à {env_path}")
+        return {}
 
+# Charger les variables dans os.environ
+env_vars = load_env_manually()
+for key, value in env_vars.items():
+    os.environ[key] = value
+
+# Lecture des variables
 PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
@@ -31,24 +51,14 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))
 WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "60"))
 
-# Priorité st.secrets pour Streamlit Cloud
-try:
-    import streamlit as st
-    if hasattr(st, 'secrets'):
-        TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", TELEGRAM_BOT_TOKEN)
-        TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", TELEGRAM_CHAT_ID)
-        PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", PARSEBOT_API_KEY)
-        FRED_API_KEY = st.secrets.get("FRED_API_KEY", FRED_API_KEY)
-except Exception:
-    pass
-
-# Vérification des tokens
+# Vérification critique des tokens
 if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
-    print("⚠️ Tokens Telegram non configurés. Le bot ne pourra pas envoyer de messages.")
+    print("❌ Tokens Telegram non configurés. Vérifiez votre fichier .env")
+    sys.exit(1)
 else:
     print("✅ Tokens Telegram configurés.")
 
-# --- Import conditionnel de streamlit et pandas pour l'interface ---
+# --- Import conditionnel de streamlit et pandas ---
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "--watch" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
     import streamlit as st
     import pandas as pd
@@ -112,6 +122,7 @@ def save_json(filename: str, data: List):
 # ============================================================
 def get_parsebot_events_rest() -> List[Dict]:
     if not PARSEBOT_API_KEY:
+        print("⚠️ PARSEBOT_API_KEY non définie.")
         return []
     url = "https://api.parse.bot/scraper/5d47f2a9-c902-4fe9-ac2d-3e00c66f7b7a/get_daily_events"
     headers = {"X-API-Key": PARSEBOT_API_KEY}
@@ -123,6 +134,7 @@ def get_parsebot_events_rest() -> List[Dict]:
         print(f"❌ Parse.bot API REST échec : {e}")
         return []
     if data.get("status") != "success":
+        print("⚠️ Parse.bot a retourné un statut non 'success'")
         return []
     events_data = data.get("data", {}).get("events", [])
     us_events = []
@@ -203,11 +215,13 @@ def get_forexfactory_json() -> List[Dict]:
 
 def get_events() -> List[Dict]:
     events = get_parsebot_events_rest()
-    ff_events = get_forexfactory_json()
-    existing_keys = {(e["event"], e["time"]) for e in events}
-    for ev in ff_events:
-        if (ev["event"], ev["time"]) not in existing_keys:
-            events.append(ev)
+    if not events:
+        print("🔄 Parse.bot vide, fallback sur ForexFactory...")
+        events = get_forexfactory_json()
+    if events:
+        print(f"✅ {len(events)} annonces US récupérées.")
+    else:
+        print("❌ Aucune annonce US trouvée.")
     return events
 
 # ============================================================
@@ -439,7 +453,6 @@ def clean_number(s):
         return 0.0
 
 def get_dollar_impact(event: Dict) -> str:
-    """Calcule l'impact directionnel sur le Dollar en fonction de l'écart réel/prévision."""
     actual = event.get("actual", "N/A")
     forecast = event.get("forecast", "N/A")
     event_name = event.get("event", "")
@@ -451,11 +464,9 @@ def get_dollar_impact(event: Dict) -> str:
     except:
         return "⚠️ Impossible d'évaluer l'impact (vérifier les unités)"
 
-    # Indicateurs inverses : si la valeur réelle est plus basse que prévu, c'est haussier
     inverse_indicators = ["unemployment rate", "jobless claims", "initial claims", "continuing claims",
                           "crude oil inventories", "eia crude oil", "trade balance", "current account"]
     is_inverse = any(kw in event_name.lower() for kw in inverse_indicators)
-    # Exceptions : Core CPI, NFP, AHE, ISM sont normaux
     if any(kw in event_name.lower() for kw in ["core cpi", "nfp", "non-farm", "ahe", "average hourly", "ism", "pmi"]):
         is_inverse = False
 
@@ -499,9 +510,6 @@ def generate_analysis(event: Dict) -> Dict:
 def send_telegram_message(message: str) -> bool:
     token = TELEGRAM_BOT_TOKEN
     chat_id = TELEGRAM_CHAT_ID
-    if token == "VOTRE_TOKEN" or chat_id == "VOTRE_CHAT_ID":
-        print("⚠️ Token ou Chat ID non configurés.")
-        return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
     success = True
@@ -532,7 +540,6 @@ def interpret_event_for_telegram(event: Dict) -> str:
     return "\n".join(lines)
 
 def check_and_notify_updates(new_events: List[Dict], send_immediate: bool = True):
-    """Vérifie les nouvelles annonces et mises à jour des valeurs réelles, envoie des notifications."""
     old_events = load_json(CACHE_FILE, [])
     notified_ids = load_json(NOTIFIED_FILE, [])
     notified_set = set(notified_ids)
@@ -546,13 +553,11 @@ def check_and_notify_updates(new_events: List[Dict], send_immediate: bool = True
     for ne in new_events:
         key = ne.get("event_id") or f"{ne['event']}_{ne['time']}"
         if key not in old_map:
-            # Nouvel événement
             updates.append(ne)
         else:
             old_actual = old_map[key].get("actual", "N/A")
             new_actual = ne.get("actual", "N/A")
             if old_actual == "N/A" and new_actual != "N/A" and key not in notified_set:
-                # Mise à jour de la valeur réelle
                 updates.append(ne)
 
     if updates and send_immediate:
@@ -651,26 +656,16 @@ def run_batch_once():
     print(f"🚀 BATCH UTC - Annonces du {TODAY_DISPLAY}")
     events = get_events()
     fred_data = get_fred_snapshot() if FRED_API_KEY else {}
-    # Envoi d'un message de démarrage
     start_msg = f"🟢 BOT D'ANALYSE ÉCONOMIQUE DÉMARRÉ (batch) – {TODAY_DISPLAY}"
     send_telegram_message(start_msg)
     if not events:
-        # Envoyer un message même sans annonce
         report = generate_report([], fred_data, "⚠️ Aucune annonce US prévue aujourd'hui.")
-        if send_telegram_message(report):
-            print("✅ Rapport envoyé (sans annonce).")
-        else:
-            print("⚠️ Échec de l'envoi du rapport.")
+        send_telegram_message(report)
         return
 
-    # Notifier les mises à jour immédiates (si des valeurs réelles sont déjà disponibles)
     check_and_notify_updates(events, send_immediate=True)
-
     report = generate_report(events, fred_data, "📊 RAPPORT COMPLET DU JOUR")
-    if send_telegram_message(report):
-        print("✅ Rapport complet envoyé.")
-    else:
-        print("⚠️ Échec de l'envoi du rapport complet.")
+    send_telegram_message(report)
 
     with open(f"rapport_annonces_{TODAY}.txt", "w", encoding="utf-8") as f:
         f.write(report)
@@ -679,7 +674,6 @@ def run_batch_once():
 def run_batch_continuous():
     print(f"🚀 CONTINU - Annonces du {TODAY_DISPLAY}")
     print(f"⏱️ Intervalle : {REFRESH_INTERVAL} secondes")
-    # Message de test au démarrage
     test_msg = f"🟢 BOT D'ANALYSE ÉCONOMIQUE DÉMARRÉ (continu) – {TODAY_DISPLAY}\n📡 Intervalle : {REFRESH_INTERVAL} secondes."
     send_telegram_message(test_msg)
 
@@ -688,21 +682,12 @@ def run_batch_continuous():
             events = get_events()
             fred_data = get_fred_snapshot() if FRED_API_KEY else {}
             if not events:
-                # Envoyer un message de statut même sans annonce
                 report = generate_report([], fred_data, "⚠️ Aucune annonce US prévue pour le moment.")
-                if send_telegram_message(report):
-                    print("✅ Rapport de statut envoyé (aucune annonce).")
-                else:
-                    print("⚠️ Échec de l'envoi du rapport de statut.")
+                send_telegram_message(report)
             else:
-                # Détecter et notifier les nouvelles annonces ou mises à jour
                 check_and_notify_updates(events, send_immediate=True)
-                # Envoyer un rapport complet périodique
                 report = generate_report(events, fred_data, "📊 MISE À JOUR PÉRIODIQUE")
-                if send_telegram_message(report):
-                    print("✅ Rapport complet envoyé.")
-                else:
-                    print("⚠️ Échec de l'envoi du rapport complet.")
+                send_telegram_message(report)
 
             timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
             os.makedirs("logs", exist_ok=True)
@@ -719,14 +704,11 @@ def run_batch_continuous():
             time.sleep(60)
 
 def run_batch_watch():
-    """Mode watch : surveille en temps réel et notifie uniquement les nouvelles annonces/mises à jour."""
     print(f"🚀 WATCH - Surveillance des annonces du {TODAY_DISPLAY}")
     print(f"⏱️ Intervalle : {WATCH_INTERVAL} secondes")
-    # Message de test
     test_msg = f"🟢 BOT DE SURVEILLANCE DÉMARRÉ – {TODAY_DISPLAY}\n📡 Intervalle : {WATCH_INTERVAL} secondes."
     send_telegram_message(test_msg)
 
-    # Charger l'état précédent
     notified_ids = set(load_json(NOTIFIED_FILE, []))
     previous_events = load_json(CACHE_FILE, [])
 
@@ -738,7 +720,6 @@ def run_batch_watch():
                 time.sleep(WATCH_INTERVAL)
                 continue
 
-            # Détecter les changements
             old_map = {}
             for e in previous_events:
                 key = e.get("event_id") or f"{e['event']}_{e['time']}"
@@ -773,7 +754,6 @@ def run_batch_watch():
                 else:
                     print("⚠️ Échec de l'envoi de la notification.")
 
-            # Mettre à jour le cache
             save_json(CACHE_FILE, current_events)
             previous_events = current_events
 
@@ -845,13 +825,10 @@ if __name__ == "__main__":
             run_batch_watch()
             sys.exit(0)
     else:
-        # Par défaut, afficher l'interface Streamlit ou exécuter un batch simple
+        # Par défaut : si streamlit est disponible, lancer l'interface, sinon batch
         try:
-            # Si streamlit est importé, on lance l'interface
-            if 'streamlit' in sys.modules:
-                show_streamlit_interface()
-            else:
-                # Sinon, mode batch par défaut
-                run_batch_once()
+            import streamlit as st
+            show_streamlit_interface()
         except ImportError:
+            print("ℹ️ Streamlit non disponible, exécution en mode batch.")
             run_batch_once()
