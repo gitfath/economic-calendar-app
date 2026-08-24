@@ -13,35 +13,20 @@ import requests
 from datetime import datetime, timezone
 from typing import List, Dict
 from pathlib import Path
-from dotenv import load_dotenv
 
 # ============================================================
-# Chargement du fichier .env (si présent) et fallback st.secrets
+# Chargement optionnel du fichier .env (si dotenv est installé)
 # ============================================================
-dotenv_path = Path(__file__).parent / ".env"
-if dotenv_path.exists():
-    load_dotenv(dotenv_path=dotenv_path)
-    print(f"✅ .env chargé depuis {dotenv_path}")
-else:
-    print("ℹ️ Aucun .env trouvé, utilisation des variables d'environnement ou st.secrets")
-
-# Variables qui peuvent provenir de .env ou st.secrets selon le contexte
 try:
-    import streamlit as st
-    PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", os.getenv("PARSEBOT_API_KEY", ""))
-    TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN"))
-    TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID"))
-except Exception:
-    # En mode batch (pas de st.secrets)
-    PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
-
-FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))  # 30 min
-
-CACHE_FILE = "events_cache.json"
-NOTIFIED_FILE = "notified_events.json"
+    from dotenv import load_dotenv
+    dotenv_path = Path(__file__).parent / ".env"
+    if dotenv_path.exists():
+        load_dotenv(dotenv_path=dotenv_path)
+        print(f"✅ .env chargé depuis {dotenv_path}")
+    else:
+        print("ℹ️ Aucun .env trouvé, utilisation des variables d'environnement ou st.secrets")
+except ImportError:
+    print("ℹ️ python-dotenv non installé, utilisation des variables d'environnement ou st.secrets")
 
 # --- Import conditionnel de streamlit et pandas (seulement en mode interface) ---
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
@@ -82,16 +67,25 @@ else:
     pd = None
 
 # ============================================================
-# 1. CONFIGURATION
+# 1. CONFIGURATION (avec fallback st.secrets)
 # ============================================================
+# On essaie d'abord st.secrets si présent, sinon os.getenv
 try:
-    PARSEBOT_API_KEY = st.secrets["PARSEBOT_API_KEY"]
+    # Si streamlit est importé, on utilise st.secrets
+    if not isinstance(st, DummySt):
+        PARSEBOT_API_KEY = st.secrets.get("PARSEBOT_API_KEY", os.getenv("PARSEBOT_API_KEY", ""))
+        TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN"))
+        TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID"))
+    else:
+        PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
+        TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
+        TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
 except Exception:
     PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
 
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))  # 30 min
 
 CACHE_FILE = "events_cache.json"
