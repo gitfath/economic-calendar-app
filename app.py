@@ -13,6 +13,15 @@ import requests
 from datetime import datetime, timezone
 from typing import List, Dict
 
+# ============================================================
+# 0. CHARGEMENT DES VARIABLES D'ENVIRONNEMENT (AJOUTÉ)
+# ============================================================
+try:
+    from dotenv import load_dotenv
+    load_dotenv()  # Charge les variables du fichier .env
+except ImportError:
+    print("⚠️ python-dotenv non installé. Utilisation des variables d'environnement système.")
+
 # --- Import conditionnel de streamlit et pandas (seulement en mode interface) ---
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
     import streamlit as st
@@ -661,12 +670,10 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
     lines.append("=" * 80)
     lines.append("")
 
-    # Affichage du snapshot FRED uniquement si des données sont disponibles
     if fred_data:
         lines.append("📈 SNAPSHOT DES INDICATEURS (valeurs réelles FRED) :")
         lines.append(format_fred_snapshot(fred_data))
         lines.append("")
-    # Si FRED_API_KEY est définie mais aucune donnée, on peut ajouter un message léger (optionnel)
     elif FRED_API_KEY:
         lines.append("⚠️ Snapshot FRED temporairement indisponible (voir logs pour plus d'infos).")
         lines.append("")
@@ -691,7 +698,6 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
             for line in a['interpretation'].split('\n'):
                 lines.append(f"      {line}")
             lines.append(f"   🎯 STRATÉGIE : {a['strategy']}")
-            # Lien vers Investing.com
             lines.append(f"   🔗 Calendrier Investing.com : https://www.investing.com/economic-calendar/")
             lines.append("-" * 80)
             lines.append("")
@@ -744,6 +750,11 @@ def run_batch_continuous():
     """Mode continu : envoie un rapport complet toutes les 30 minutes."""
     print(f"🚀 CONTINU - Annonces du {TODAY_DISPLAY}")
     print(f"⏱️ Intervalle : {REFRESH_INTERVAL} secondes")
+
+    # Vérification des tokens au démarrage
+    if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
+        print("⚠️ ATTENTION : Tokens Telegram non configurés ! Les messages ne seront pas envoyés.")
+        print(f"   Token: {TELEGRAM_BOT_TOKEN[:5]}... | Chat ID: {TELEGRAM_CHAT_ID}")
 
     while True:
         try:
