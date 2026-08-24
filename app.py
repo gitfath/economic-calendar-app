@@ -524,7 +524,7 @@ def get_dollar_impact(event: Dict) -> str:
         def clean_number(s):
             if not s or s == "N/A":
                 return 0.0
-            s = str(s).replace("%", "").replace("K", "").replace("M", "").replace("B", "").replace("T", "").replace(", "").strip()
+            s = str(s).replace("%", "").replace("K", "").replace("M", "").replace("B", "").replace("T", "").replace(",", "").strip()
             return float(s) if s else 0.0
 
         actual_val = clean_number(actual)
