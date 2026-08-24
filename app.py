@@ -14,13 +14,10 @@ from datetime import datetime, timezone
 from typing import List, Dict
 
 # ============================================================
-# 0. CHARGEMENT DES VARIABLES D'ENVIRONNEMENT (AJOUTÉ)
+# ⚠️ AJOUT CRITIQUE : charger .env en premier
 # ============================================================
-try:
-    from dotenv import load_dotenv
-    load_dotenv()  # Charge les variables du fichier .env
-except ImportError:
-    print("⚠️ python-dotenv non installé. Utilisation des variables d'environnement système.")
+from dotenv import load_dotenv
+load_dotenv()  # <--- c'est cette ligne qui manquait !
 
 # --- Import conditionnel de streamlit et pandas (seulement en mode interface) ---
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
@@ -69,8 +66,8 @@ except Exception:
     PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
 
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-TELEGRAM_BOT_TOKEN = st.secrets.get("TELEGRAM_BOT_TOKEN", os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN"))
-TELEGRAM_CHAT_ID = st.secrets.get("TELEGRAM_CHAT_ID", os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID"))
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))  # 30 min
 
 CACHE_FILE = "events_cache.json"
@@ -670,6 +667,7 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
     lines.append("=" * 80)
     lines.append("")
 
+    # Affichage du snapshot FRED uniquement si des données sont disponibles
     if fred_data:
         lines.append("📈 SNAPSHOT DES INDICATEURS (valeurs réelles FRED) :")
         lines.append(format_fred_snapshot(fred_data))
@@ -750,11 +748,9 @@ def run_batch_continuous():
     """Mode continu : envoie un rapport complet toutes les 30 minutes."""
     print(f"🚀 CONTINU - Annonces du {TODAY_DISPLAY}")
     print(f"⏱️ Intervalle : {REFRESH_INTERVAL} secondes")
-
-    # Vérification des tokens au démarrage
-    if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
-        print("⚠️ ATTENTION : Tokens Telegram non configurés ! Les messages ne seront pas envoyés.")
-        print(f"   Token: {TELEGRAM_BOT_TOKEN[:5]}... | Chat ID: {TELEGRAM_CHAT_ID}")
+    # Affichage des tokens pour debug
+    print(f"🔑 Token Telegram : {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:] if len(TELEGRAM_BOT_TOKEN)>10 else ''}")
+    print(f"🆔 Chat ID : {TELEGRAM_CHAT_ID}")
 
     while True:
         try:
