@@ -14,10 +14,15 @@ from datetime import datetime, timezone
 from typing import List, Dict
 
 # ============================================================
-# ⚠️ AJOUT CRITIQUE : charger .env en premier
+# Chargement optionnel du fichier .env (si dotenv est installé)
 # ============================================================
-from dotenv import load_dotenv
-load_dotenv()  # <--- c'est cette ligne qui manquait !
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    print("✅ .env chargé avec python-dotenv")
+except ImportError:
+    # python-dotenv n'est pas installé, on utilise les variables d'environnement système
+    print("ℹ️ python-dotenv non installé, utilisation des variables d'environnement système.")
 
 # --- Import conditionnel de streamlit et pandas (seulement en mode interface) ---
 if "--batch" not in sys.argv and "--continuous" not in sys.argv and "action" not in os.environ.get("QUERY_STRING", ""):
