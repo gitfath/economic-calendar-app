@@ -291,7 +291,7 @@ def get_fred_snapshot() -> Dict:
     return result
 
 # ============================================================
-# BASE DE CONNAISSANCES (INDICATOR_KNOWLEDGE)
+# BASE DE CONNAISSANCES (INDICATOR_KNOWLEDGE) - Version complète
 # ============================================================
 INDICATOR_KNOWLEDGE = {
     "FOMC": {
@@ -524,7 +524,7 @@ def get_dollar_impact(event: Dict) -> str:
         def clean_number(s):
             if not s or s == "N/A":
                 return 0.0
-            s = str(s).replace("%", "").replace("K", "").replace("M", "").replace("B", "").replace("T", "").replace(",", "").strip()
+            s = str(s).replace("%", "").replace("K", "").replace("M", "").replace("B", "").replace("T", "").replace(", "").strip()
             return float(s) if s else 0.0
 
         actual_val = clean_number(actual)
@@ -570,7 +570,7 @@ def get_dollar_impact(event: Dict) -> str:
             return "🔴 Impact BAISSIER sur le Dollar (pire que prévu : valeur plus faible)"
 
 # ============================================================
-# NOTIFICATIONS TELEGRAM
+# NOTIFICATIONS TELEGRAM (AVEC LOGS DÉTAILLÉS)
 # ============================================================
 def send_telegram_message(message: str) -> bool:
     token = TELEGRAM_BOT_TOKEN
@@ -578,17 +578,29 @@ def send_telegram_message(message: str) -> bool:
     if token == "VOTRE_TOKEN" or chat_id == "VOTRE_CHAT_ID":
         print("⚠️ Token ou Chat ID non configurés.")
         return False
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+
+    # Limiter la taille du message (Telegram accepte jusqu'à 4096 caractères)
+    # Mais si le message est plus long, on le découpe.
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
+    if not chunks:
+        print("⚠️ Message vide, rien à envoyer.")
+        return False
+
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     success = True
     for idx, chunk in enumerate(chunks):
         if len(chunks) > 1:
             chunk = f"[{idx+1}/{len(chunks)}]\n{chunk}"
         try:
+            print(f"📤 Envoi chunk {idx+1}/{len(chunks)}...")
             resp = requests.post(url, json={"chat_id": chat_id, "text": chunk}, timeout=10)
             resp.raise_for_status()
+            print(f"✅ Chunk {idx+1} envoyé (status {resp.status_code})")
+        except requests.exceptions.HTTPError as e:
+            print(f"❌ Erreur HTTP chunk {idx+1}: {e.response.status_code} - {e.response.text}")
+            success = False
         except Exception as e:
-            print(f"❌ Erreur envoi chunk {idx+1} : {e}")
+            print(f"❌ Erreur envoi chunk {idx+1}: {e}")
             success = False
     return success
 
@@ -793,6 +805,14 @@ def run_batch_continuous():
     print(f"🔑 Token Telegram : {TELEGRAM_BOT_TOKEN[:5]}...{TELEGRAM_BOT_TOKEN[-5:] if len(TELEGRAM_BOT_TOKEN)>10 else ''}")
     print(f"🆔 Chat ID : {TELEGRAM_CHAT_ID}")
     print(f"🔑 FRED_API_KEY : {FRED_API_KEY[:5]}...{FRED_API_KEY[-5:] if len(FRED_API_KEY)>10 else ''}")
+
+    # TEST D'ENVOI AU DÉMARRAGE
+    test_msg = f"✅ Bot démarré le {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC\n📌 Intervalle de mise à jour : {REFRESH_INTERVAL} secondes."
+    print("📤 Envoi d'un message de test...")
+    if send_telegram_message(test_msg):
+        print("✅ Message de test envoyé avec succès.")
+    else:
+        print("⚠️ Échec du message de test. Vérifiez vos tokens.")
 
     while True:
         try:
