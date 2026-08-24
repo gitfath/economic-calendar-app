@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Application Streamlit + Bot Telegram (mode continu optimisé)
-Rafraîchissement des données à chaque itération, pas de cache long.
+Application Streamlit + Bot Telegram (mode watch)
+Surveille les nouvelles annonces US en temps réel et notifie sur Telegram.
 """
 
 import os
@@ -31,9 +31,9 @@ PARSEBOT_API_KEY = os.getenv("PARSEBOT_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "VOTRE_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "VOTRE_CHAT_ID")
 FRED_API_KEY = os.getenv("FRED_API_KEY", "")
-REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "1800"))
+WATCH_INTERVAL = int(os.getenv("WATCH_INTERVAL", "60"))  # secondes
 
-# Si on est sur Streamlit Cloud, on priorise st.secrets
+# Priorité st.secrets pour Streamlit Cloud
 try:
     import streamlit as st
     if hasattr(st, 'secrets'):
@@ -46,24 +46,21 @@ except Exception:
     pass
 
 # ============================================================
-# 3. VÉRIFICATION
+# 3. VÉRIFICATION DES TOKENS
 # ============================================================
 print("\n🔍 DIAGNOSTIC :")
 print(f"   TELEGRAM_BOT_TOKEN : {'OK' if TELEGRAM_BOT_TOKEN != 'VOTRE_TOKEN' else 'MANQUANT'}")
 print(f"   TELEGRAM_CHAT_ID   : {'OK' if TELEGRAM_CHAT_ID != 'VOTRE_CHAT_ID' else 'MANQUANT'}")
 print(f"   FRED_API_KEY       : {'OK' if FRED_API_KEY else 'MANQUANT'}")
 print(f"   PARSEBOT_API_KEY   : {'OK' if PARSEBOT_API_KEY else 'MANQUANT'}")
-if TELEGRAM_BOT_TOKEN != 'VOTRE_TOKEN':
-    print(f"   Token (début) : {TELEGRAM_BOT_TOKEN[:5]}...")
-if TELEGRAM_CHAT_ID != 'VOTRE_CHAT_ID':
-    print(f"   Chat ID : {TELEGRAM_CHAT_ID}")
+print(f"   Intervalle watch   : {WATCH_INTERVAL} secondes\n")
 
 if TELEGRAM_BOT_TOKEN == "VOTRE_TOKEN" or TELEGRAM_CHAT_ID == "VOTRE_CHAT_ID":
     print("❌ Tokens Telegram non configurés. Arrêt.")
     sys.exit(1)
 
 # ============================================================
-# 4. FONCTIONS DE RÉCUPÉRATION (sans cache)
+# 4. FONCTIONS DE RÉCUPÉRATION (inchangées)
 # ============================================================
 def get_today_utc() -> tuple:
     now_utc = datetime.now(timezone.utc)
@@ -72,7 +69,6 @@ def get_today_utc() -> tuple:
 TODAY, TODAY_DISPLAY = get_today_utc()
 
 def get_parsebot_events_rest() -> List[Dict]:
-    """Récupère les annonces US depuis Parse.bot (API temps réel)."""
     if not PARSEBOT_API_KEY:
         return []
     url = "https://api.parse.bot/scraper/5d47f2a9-c902-4fe9-ac2d-3e00c66f7b7a/get_daily_events"
@@ -120,7 +116,6 @@ def get_parsebot_events_rest() -> List[Dict]:
         return []
 
 def get_forexfactory_json() -> List[Dict]:
-    """Récupère les annonces depuis le flux JSON public (fallback)."""
     url = "https://nfs.faireconomy.media/ff_calendar_thisweek.json"
     try:
         resp = requests.get(url, timeout=10)
@@ -165,7 +160,6 @@ def get_forexfactory_json() -> List[Dict]:
     return events
 
 def get_events() -> tuple:
-    """Récupère les événements du jour (sans cache)."""
     events = get_parsebot_events_rest()
     if not events:
         print("🔄 Parse.bot vide, fallback sur ForexFactory...")
@@ -173,6 +167,9 @@ def get_events() -> tuple:
     fred_data = get_fred_snapshot() if FRED_API_KEY else {}
     return events, fred_data
 
+# ============================================================
+# 5. FRED API (inchangée)
+# ============================================================
 FRED_SERIES = {
     "CPIAUCSL": {"name": "CPI (Inflation)"},
     "UNRATE": {"name": "Taux de chômage"},
@@ -182,7 +179,6 @@ FRED_SERIES = {
 }
 
 def get_fred_snapshot() -> Dict:
-    """Récupère les dernières valeurs FRED (si la clé est valide)."""
     if not FRED_API_KEY:
         return {}
     result = {}
@@ -211,7 +207,7 @@ def get_fred_snapshot() -> Dict:
     return result
 
 # ============================================================
-# 5. BASE DE CONNAISSANCES (simplifiée)
+# 6. BASE DE CONNAISSANCES ET ANALYSE
 # ============================================================
 INDICATOR_KNOWLEDGE = {
     "FOMC": {
@@ -232,7 +228,84 @@ INDICATOR_KNOWLEDGE = {
         "thresholds": {"> +200k": "Dollar haussier", "< +100k": "Dollar baissier"},
         "strategy": "Regarder les révisions et les salaires."
     },
-    # Ajoutez d'autres indicateurs si nécessaire...
+    "Unemployment Rate": {
+        "category": "Emploi",
+        "description": "Taux de chômage officiel.",
+        "thresholds": {"En baisse": "Dollar haussier", "En hausse > 0.2%": "Dollar baissier"},
+        "strategy": "Vérifier le taux de participation."
+    },
+    "AHE": {
+        "category": "Emploi",
+        "description": "Salaires horaires moyens.",
+        "thresholds": {"> 0.4%": "Dollar très haussier", "< 0.2%": "Dollar baissier"},
+        "strategy": "Un AHE élevé est plus important qu'un NFP élevé."
+    },
+    "PPI": {
+        "category": "Inflation",
+        "description": "Indice des prix à la production.",
+        "thresholds": {"> 0.5%": "Dollar haussier", "< 0.1%": "Dollar baissier"},
+        "strategy": "Anticipe le CPI dans 2 à 6 semaines."
+    },
+    "Core PCE": {
+        "category": "Inflation",
+        "description": "Indicateur d'inflation officiel de la Fed.",
+        "thresholds": {"> 0.3%": "Dollar très haussier", "< 0.2%": "Dollar baissier"},
+        "strategy": "L'indicateur roi."
+    },
+    "Retail Sales": {
+        "category": "Consommation",
+        "description": "Ventes au détail.",
+        "thresholds": {"Control Group > 0.5%": "Dollar haussier", "< 0.1%": "Dollar baissier"},
+        "strategy": "Regarder le Control Group."
+    },
+    "GDP": {
+        "category": "Croissance",
+        "description": "Produit intérieur brut.",
+        "thresholds": {"> 3.0%": "Dollar haussier", "< 1.5%": "Dollar baissier"},
+        "strategy": "Regarder la composante consommation."
+    },
+    "ISM Manufacturing": {
+        "category": "Croissance",
+        "description": "PMI manufacturier.",
+        "thresholds": {"> 50": "Dollar haussier", "< 50": "Dollar baissier"},
+        "strategy": "Regarder la composante 'Prix Payés'."
+    },
+    "ISM Services": {
+        "category": "Croissance",
+        "description": "PMI des services.",
+        "thresholds": {"> 55": "Dollar haussier", "< 50": "Dollar baissier"},
+        "strategy": "Regarder 'Prices Paid' > 65."
+    },
+    "Jobless Claims": {
+        "category": "Emploi",
+        "description": "Inscriptions au chômage.",
+        "thresholds": {"MA4 < 200k": "Dollar haussier", "MA4 > 220k": "Dollar baissier"},
+        "strategy": "Suivre la moyenne mobile sur 4 semaines."
+    },
+    "JOLTS": {
+        "category": "Emploi",
+        "description": "Offres d'emploi.",
+        "thresholds": {"Ratio > 1.5": "Dollar haussier", "Ratio < 1.0": "Dollar baissier"},
+        "strategy": "Regarder le taux de démission."
+    },
+    "ADP": {
+        "category": "Emploi",
+        "description": "Rapport privé sur l'emploi.",
+        "thresholds": {},
+        "strategy": "⚠️ Ne pas trader sur l'ADP."
+    },
+    "FOMC Minutes": {
+        "category": "Monétaire",
+        "description": "Compte-rendu du FOMC.",
+        "thresholds": {"Hawkish": "Dollar fort", "Dovish": "Dollar faible"},
+        "strategy": "Lire les passages sur l'inflation."
+    },
+    "Fed Speech": {
+        "category": "Monétaire",
+        "description": "Discours d'un membre de la Fed.",
+        "thresholds": {"Hawkish": "Dollar fort", "Dovish": "Dollar faible"},
+        "strategy": "Surveiller les mots clés."
+    }
 }
 
 def classify_event(event_name: str) -> Dict:
@@ -240,6 +313,25 @@ def classify_event(event_name: str) -> Dict:
         if key.lower() in event_name.lower():
             return knowledge
     return {"category": "Autre", "description": "Événement économique", "thresholds": {}, "strategy": "Consulter les détails."}
+
+def get_dollar_impact(event: Dict) -> str:
+    actual = event.get("actual", "N/A")
+    forecast = event.get("forecast", "N/A")
+    if actual == "N/A" or forecast == "N/A":
+        return "⏳ Impact non déterminé"
+    try:
+        def clean(s):
+            s = str(s).replace("%", "").replace(",", "").strip()
+            return float(s) if s else 0.0
+        diff = clean(actual) - clean(forecast)
+        if diff > 0:
+            return "🟢 HAUSSIER (meilleur que prévu)"
+        elif diff < 0:
+            return "🔴 BAISSIER (pire que prévu)"
+        else:
+            return "➖ NEUTRE (conforme)"
+    except:
+        return "⚠️ Impact non calculable"
 
 def generate_analysis(event: Dict) -> Dict:
     event_name = event.get("event", "Inconnu")
@@ -259,7 +351,7 @@ def generate_analysis(event: Dict) -> Dict:
     }
 
 # ============================================================
-# 6. GÉNÉRATION DU RAPPORT
+# 7. GÉNÉRATION DU RAPPORT (pour interface)
 # ============================================================
 def format_fred_snapshot(fred_data: Dict) -> str:
     if not fred_data:
@@ -278,12 +370,10 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
     lines.append(f"📊 ANNONCES ÉCONOMIQUES DU {TODAY_DISPLAY} (UTC)")
     lines.append("=" * 80)
     lines.append("")
-
     fred_text = format_fred_snapshot(fred_data)
     if fred_text:
         lines.append(fred_text)
         lines.append("")
-
     if not events:
         lines.append("📭 Aucune annonce économique US prévue aujourd'hui.")
     else:
@@ -305,7 +395,6 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
             lines.append("")
         sources = set(e.get('source', 'Inconnue') for e in events)
         lines.append(f"📌 Source : {', '.join(sources)}")
-
     lines.append("")
     lines.append("=" * 80)
     lines.append("💡 RAPPEL : Ne jamais trader les 15 premières minutes après une annonce.")
@@ -314,13 +403,12 @@ def generate_report(events: List[Dict], fred_data: Dict) -> str:
     return "\n".join(lines)
 
 # ============================================================
-# 7. ENVOI TELEGRAM (avec logs)
+# 8. ENVOI TELEGRAM
 # ============================================================
 def send_telegram_message(message: str) -> bool:
     token = TELEGRAM_BOT_TOKEN
     chat_id = TELEGRAM_CHAT_ID
     if token == "VOTRE_TOKEN" or chat_id == "VOTRE_CHAT_ID":
-        print("⚠️ Token ou Chat ID non configurés.")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
@@ -331,45 +419,10 @@ def send_telegram_message(message: str) -> bool:
         try:
             resp = requests.post(url, json={"chat_id": chat_id, "text": chunk}, timeout=10)
             resp.raise_for_status()
-            print(f"✅ Chunk {idx+1} envoyé (status {resp.status_code})")
         except Exception as e:
             print(f"❌ Erreur envoi chunk {idx+1} : {e}")
             success = False
     return success
-
-# ============================================================
-# 8. MODE CONTINU (raffraîchissement sans cache)
-# ============================================================
-def run_continuous():
-    print(f"🚀 MODE CONTINU - Annonces du {TODAY_DISPLAY}")
-    print(f"⏱️ Intervalle : {REFRESH_INTERVAL} secondes")
-    # Test d'envoi
-    test_msg = f"✅ Bot démarré en mode continu à {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC."
-    if send_telegram_message(test_msg):
-        print("✅ Message de test envoyé.")
-    else:
-        print("⚠️ Échec du message de test.")
-
-    while True:
-        try:
-            # Récupération des données fraîches
-            events, fred_data = get_events()
-            report = generate_report(events, fred_data)
-            print("\n" + report)
-            if send_telegram_message(report):
-                print("✅ Rapport envoyé.")
-            else:
-                print("⚠️ Échec de l'envoi du rapport.")
-            # Sauvegarde locale pour tracer
-            with open(f"logs/rapport_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}.txt", "w") as f:
-                f.write(report)
-            time.sleep(REFRESH_INTERVAL)
-        except KeyboardInterrupt:
-            print("⏹️ Arrêt demandé.")
-            break
-        except Exception as e:
-            print(f"❌ Erreur : {e}")
-            time.sleep(60)
 
 # ============================================================
 # 9. INTERFACE STREAMLIT
@@ -379,14 +432,10 @@ def show_interface():
     import pandas as pd
     st.set_page_config(page_title="Annonces Économiques US", layout="wide")
     st.title("📊 Annonces Économiques US – Jour en cours")
-    last_refresh = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
-    st.caption(f"Dernier rafraîchissement : {last_refresh}")
-
-    events, _ = get_events()
+    events, fred_data = get_events()
     if not events:
         st.warning("Aucune annonce économique US prévue aujourd'hui.")
         return
-
     df = pd.DataFrame(events)
     df = df.rename(columns={
         "event": "Événement",
@@ -397,6 +446,10 @@ def show_interface():
         "previous": "Précédent"
     })
     st.dataframe(df, use_container_width=True)
+    if fred_data:
+        st.subheader("📈 Snapshot FRED")
+        for k, v in fred_data.items():
+            st.metric(label=v["name"], value=v["value"], help=f"Date: {v['date']}")
 
     st.subheader("📖 Détails")
     for _, row in df.iterrows():
@@ -412,20 +465,106 @@ def show_interface():
     if st.button("🔄 Forcer le rafraîchissement"):
         st.rerun()
 
-    st.caption("Données : Parse.bot / ForexFactory | Rafraîchissement auto toutes les 30 min.")
+# ============================================================
+# 10. MODE WATCH (SURVEILLANCE TEMPS RÉEL)
+# ============================================================
+CACHE_FILE = "events_cache.json"
+NOTIFIED_FILE = "notified_events.json"
+
+def load_json(filename: str, default: list = None) -> list:
+    try:
+        with open(filename, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return default if default is not None else []
+
+def save_json(filename: str, data: list):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+def interpret_event(event: Dict) -> str:
+    """Version courte pour les notifications Telegram."""
+    a = generate_analysis(event)
+    lines = []
+    lines.append(f"📌 {a['event']} à {a['time']} (impact: {a['impact']})")
+    lines.append(f"📖 {a['description']}")
+    lines.append(f"📊 Réel: {event.get('actual', 'N/A')} | Prévision: {a['forecast']} | Précédent: {a['previous']}")
+    impact_msg = get_dollar_impact(event)
+    lines.append(f"💵 Impact Dollar : {impact_msg}")
+    if a['interpretation']:
+        lines.append(f"🔍 Seuils : {a['interpretation']}")
+    lines.append(f"🎯 Stratégie : {a['strategy']}")
+    lines.append("🔗 Calendrier : https://www.forexfactory.com/calendar")
+    return "\n".join(lines)
+
+def watch():
+    print(f"🚀 SURVEILLANCE ACTIVE - Annonces du {TODAY}")
+    print(f"⏱️ Intervalle : {WATCH_INTERVAL} secondes\n")
+
+    notified_ids = set(load_json(NOTIFIED_FILE, []))
+    previous_events = load_json(CACHE_FILE, [])
+    prev_map = {}
+    for e in previous_events:
+        key = e.get("event_id") or f"{e['event']}_{e['time']}"
+        prev_map[key] = e
+
+    while True:
+        try:
+            events, _ = get_events()  # on ignore fred_data pour la surveillance
+            if not events:
+                print("⚠️ Aucune annonce US trouvée.")
+                time.sleep(WATCH_INTERVAL)
+                continue
+
+            curr_map = {}
+            for e in events:
+                key = e.get("event_id") or f"{e['event']}_{e['time']}"
+                curr_map[key] = e
+
+            for key, event in curr_map.items():
+                if key in notified_ids:
+                    # Vérifier si la valeur réelle est apparue
+                    old_actual = prev_map.get(key, {}).get("actual", "N/A")
+                    new_actual = event.get("actual", "N/A")
+                    if old_actual == "N/A" and new_actual != "N/A":
+                        msg = interpret_event(event)
+                        if send_telegram_message(msg):
+                            notified_ids.add(key)
+                            print(f"✅ Mise à jour : {event['event']} -> {new_actual}")
+                else:
+                    # Nouvel événement
+                    msg = interpret_event(event)
+                    if send_telegram_message(msg):
+                        notified_ids.add(key)
+                        print(f"✅ Nouvelle annonce : {event['event']}")
+
+            # Sauvegarde du cache
+            save_json(CACHE_FILE, events)
+            save_json(NOTIFIED_FILE, list(notified_ids))
+            prev_map = curr_map
+
+            time.sleep(WATCH_INTERVAL)
+
+        except KeyboardInterrupt:
+            print("⏹️ Arrêt demandé.")
+            break
+        except Exception as e:
+            print(f"❌ Erreur dans la boucle : {e}")
+            time.sleep(60)
 
 # ============================================================
-# 10. ENTRÉE PRINCIPALE
+# 11. ENTRÉE PRINCIPALE
 # ============================================================
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "--continuous":
-        run_continuous()
+    if len(sys.argv) > 1 and sys.argv[1] == "--watch":
+        watch()
     else:
+        # Par défaut, lancer l'interface Streamlit (ou batch simple)
         try:
             import streamlit as st
             show_interface()
         except ImportError:
-            # Exécution directe sans streamlit
+            # Pas de streamlit : exécution en batch (une seule fois)
             events, fred_data = get_events()
             report = generate_report(events, fred_data)
             print(report)
